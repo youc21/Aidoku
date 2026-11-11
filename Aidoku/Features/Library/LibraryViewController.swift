@@ -56,7 +56,6 @@ class LibraryViewController: OldMangaCollectionViewController {
     private lazy var lockedStackView = LockedPageStackView()
 
     private lazy var locked = viewModel.isCategoryLocked()
-    private var ignoreOptionChange = false
     private var lastSearch: String?
 
     private let libraryUndoManager = UndoManager()
@@ -161,48 +160,11 @@ class LibraryViewController: OldMangaCollectionViewController {
         collectionView.allowsSelectionDuringEditing = true
 
         // header view
-        let registration = UICollectionView.SupplementaryRegistration<LibraryCategorySelectionHeader>(
+        let registration = UICollectionView.SupplementaryRegistration<LibraryCategoryTabBar>(
             elementKind: UICollectionView.elementKindSectionHeader
         ) { [weak self] header, _, _ in
-            guard let self, header.options.isEmpty else { return }
-
-            header.delegate = self
-            var options: [LibraryCategorySelectionHeader.Section] = []
-            if AppSettings.library.showUncategorizedCategory.get() {
-                options.append(.init(options: [NSLocalizedString("ALL"), NSLocalizedString("UNCATEGORIZED")]))
-            } else {
-                options.append(.init(options: [NSLocalizedString("ALL")]))
-            }
-            if !viewModel.categories.isEmpty {
-                options.append(.init(title: NSLocalizedString("CATEGORIES"), options: viewModel.categories))
-            }
-            if !viewModel.filterGroups.isEmpty {
-                options.append(.init(title: NSLocalizedString("FILTER_GROUPS"), options: viewModel.filterGroups.map { $0.title }))
-            }
-            header.options = options
-            if let currentCategory = viewModel.currentCategory {
-                if let index = viewModel.categories.firstIndex(of: currentCategory) {
-                    header.setSelectedOption(IndexPath(row: index, section: 1))
-                } else if let index = viewModel.filterGroups.firstIndex(where: { $0.title == currentCategory }) {
-                    header.setSelectedOption(IndexPath(row: index, section: viewModel.categories.isEmpty ? 1 : 2))
-                } else if currentCategory.isEmpty {
-                    header.setSelectedOption(.init(row: 1, section: 0))
-                }
-            }
-
-            // load locked icons
-            if AppSettings.library.lockLibrary.get() {
-                let lockedCategories = AppSettings.library.lockedCategories.get()
-                header.lockedOptions = [IndexPath(row: 0, section: 0)] + lockedCategories.compactMap { category -> IndexPath? in
-                    if let index = self.viewModel.categories.firstIndex(of: category) {
-                        return IndexPath(row: index, section: 1)
-                    }
-                    if let index = self.viewModel.filterGroups.firstIndex(where: { $0.title == category }) {
-                        return IndexPath(row: index, section: self.viewModel.categories.isEmpty ? 1 : 2)
-                    }
-                    return nil
-                }
-            }
+            guard let self else { return }
+            self.configureCategoryHeader(header)
         }
 
         dataSource.supplementaryViewProvider = { collectionView, kind, indexPath in
@@ -474,11 +436,13 @@ class LibraryViewController: OldMangaCollectionViewController {
 
         let config = UICollectionViewCompositionalLayoutConfiguration()
         config.interSectionSpacing = layout.configuration.interSectionSpacing
-        if !viewModel.categories.isEmpty || !viewModel.filterGroups.isEmpty {
+        if !viewModel.categories.isEmpty
+            || !viewModel.filterGroups.isEmpty
+            || AppSettings.library.showUncategorizedCategory.get() {
             let globalHeader = NSCollectionLayoutBoundarySupplementaryItem(
                 layoutSize: NSCollectionLayoutSize(
                     widthDimension: .fractionalWidth(1),
-                    heightDimension: .absolute(40)
+                    heightDimension: .absolute(LibraryCategoryTabBar.height)
                 ),
                 elementKind: UICollectionView.elementKindSectionHeader,
                 alignment: .top
@@ -886,63 +850,53 @@ extension LibraryViewController {
     }
 
     func updateHeaderLockIcons() {
-        guard let header = (collectionView.supplementaryView(
-            forElementKind: UICollectionView.elementKindSectionHeader, at: IndexPath(index: 0)
-        ) as? LibraryCategorySelectionHeader) else {
+        guard let header = collectionView.supplementaryView(
+            forElementKind: UICollectionView.elementKindSectionHeader,
+            at: IndexPath(index: 0)
+        ) as? LibraryCategoryTabBar else {
             return
         }
-        if AppSettings.library.lockLibrary.get() {
-            let lockedCategories = AppSettings.library.lockedCategories.get()
-            header.lockedOptions = [IndexPath(row: 0, section: 0)] + lockedCategories.compactMap { category -> IndexPath? in
-                if let index = self.viewModel.categories.firstIndex(of: category) {
-                    return IndexPath(row: index, section: 1)
-                }
-                if let index = self.viewModel.filterGroups.firstIndex(where: { $0.title == category }) {
-                    return IndexPath(row: index, section: self.viewModel.categories.isEmpty ? 1 : 2)
-                }
-                return nil
-            }
-        } else {
-            header.lockedOptions = []
-        }
+        let lockLibrary = AppSettings.library.lockLibrary.get()
+        header.updateLockState(
+            lockedTitles: lockLibrary ? Set(AppSettings.library.lockedCategories.get()) : [],
+            libraryLocked: lockLibrary
+        )
     }
 
-    // update category options in header
+    // update category tabs in header
     func updateHeaderCategories() {
-        guard let header = (collectionView.supplementaryView(
-            forElementKind: UICollectionView.elementKindSectionHeader, at: IndexPath(index: 0)
-        ) as? LibraryCategorySelectionHeader) else {
+        guard let header = collectionView.supplementaryView(
+            forElementKind: UICollectionView.elementKindSectionHeader,
+            at: IndexPath(index: 0)
+        ) as? LibraryCategoryTabBar else {
             return
         }
+        configureCategoryHeader(header)
+    }
 
-        ignoreOptionChange = true
-        defer { ignoreOptionChange = false }
+    private func configureCategoryHeader(_ header: LibraryCategoryTabBar) {
+        header.delegate = self
+        let lockLibrary = AppSettings.library.lockLibrary.get()
+        header.configure(
+            items: makeCategoryTabItems(),
+            selected: viewModel.currentCategory,
+            lockedTitles: lockLibrary ? Set(AppSettings.library.lockedCategories.get()) : [],
+            libraryLocked: lockLibrary
+        )
+    }
 
-        var options: [LibraryCategorySelectionHeader.Section] = []
+    private func makeCategoryTabItems() -> [LibraryCategoryTabItem] {
+        var items: [LibraryCategoryTabItem] = [
+            LibraryCategoryTabItem(kind: .all, title: NSLocalizedString("ALL"))
+        ]
         if AppSettings.library.showUncategorizedCategory.get() {
-            options.append(.init(options: [NSLocalizedString("ALL"), NSLocalizedString("UNCATEGORIZED")]))
-        } else {
-            options.append(.init(options: [NSLocalizedString("ALL")]))
+            items.append(LibraryCategoryTabItem(kind: .uncategorized, title: NSLocalizedString("UNCATEGORIZED")))
         }
-        if !viewModel.categories.isEmpty {
-            options.append(.init(title: NSLocalizedString("CATEGORIES"), options: viewModel.categories))
-        }
-        if !viewModel.filterGroups.isEmpty {
-            options.append(.init(title: NSLocalizedString("FILTER_GROUPS"), options: viewModel.filterGroups.map { $0.title }))
-        }
-        header.options = options
-
-        if let currentCategory = viewModel.currentCategory {
-            if let index = viewModel.categories.firstIndex(of: currentCategory) {
-                header.setSelectedOption(IndexPath(row: index, section: 1))
-            } else if let index = viewModel.filterGroups.firstIndex(where: { $0.title == currentCategory }) {
-                header.setSelectedOption(IndexPath(row: index, section: viewModel.categories.isEmpty ? 1 : 2))
-            } else if currentCategory.isEmpty {
-                header.setSelectedOption(.init(row: 1, section: 0))
-            }
-        } else {
-            header.setSelectedOption(.init(row: 0, section: 0))
-        }
+        items.append(contentsOf: viewModel.categories.map { LibraryCategoryTabItem(kind: .category, title: $0) })
+        items.append(contentsOf: viewModel.filterGroups.map {
+            LibraryCategoryTabItem(kind: .filterGroup, title: $0.title)
+        })
+        return items
     }
 }
 
@@ -1255,24 +1209,17 @@ extension LibraryViewController {
     }
 }
 
-// MARK: - Listing Header Delegate
-extension LibraryViewController: LibraryCategorySelectionHeaderDelegate {
-    nonisolated func optionSelected(_ indexPath: IndexPath) {
+// MARK: - Category Tab Bar Delegate
+extension LibraryViewController: LibraryCategoryTabBarDelegate {
+    nonisolated func categoryTabBar(_ tabBar: LibraryCategoryTabBar, didSelect item: LibraryCategoryTabItem) {
         Task { @MainActor in
-            guard !ignoreOptionChange else {
-                ignoreOptionChange = false
-                return
-            }
-            if indexPath.section == 0 {
-                if indexPath.row == 0 {
+            switch item.kind {
+                case .all:
                     viewModel.currentCategory = nil
-                } else {
+                case .uncategorized:
                     viewModel.currentCategory = ""
-                }
-            } else if indexPath.section == 1 && !viewModel.categories.isEmpty {
-                viewModel.currentCategory = viewModel.categories[indexPath.row]
-            } else if indexPath.section == 2 || (indexPath.section == 1 && viewModel.categories.isEmpty) {
-                viewModel.currentCategory = viewModel.filterGroups[indexPath.row].title
+                case .category, .filterGroup:
+                    viewModel.currentCategory = item.title
             }
             locked = viewModel.isCategoryLocked()
             updateLockState()
