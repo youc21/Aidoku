@@ -9,7 +9,7 @@ import UIKit
 
 /// One tab shown in the library category tab bar.
 struct LibraryCategoryTabItem: Equatable, Sendable {
-    enum Kind: Sendable {
+    enum Kind: Equatable, Sendable {
         case all
         case uncategorized
         case category
@@ -405,6 +405,7 @@ private final class TabButton: UIControl {
         )
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxTitleWidth).isActive = true
 
         lockImageView.image = UIImage(
